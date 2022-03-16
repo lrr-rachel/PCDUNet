@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.optim import lr_scheduler
 import numpy as np
-from archs.edvr_arch import PCDAlignment
+from edvr_arch import PCDAlignment
 import torchvision
 from torchvision import datasets, models, transforms
 #import matplotlib.pyplot as plt
@@ -87,7 +87,7 @@ class HeathazeDataset(Dataset):
         else:
             totalframes = len(self.filesnames)
         # print("TOTAL FRAMES:",totalframes)
-        print("[CURF]:",curf)
+        # print("[CURF]:",curf)
         # print("halfcurf: int(self.numframes/2) ->",halfcurf)
         # print(curf)
 
@@ -100,7 +100,7 @@ class HeathazeDataset(Dataset):
                 rangef = range(totalframes-self.numframes+1, totalframes+1)
         else:
             rangef = range(curf-halfcurf + 1 - (self.numframes % 2), curf+halfcurf+1)
-        print("rangef:",rangef)
+        # print("rangef:",rangef)
 
         # print(rangef)
         dig = len(subname[-1])-4
@@ -111,7 +111,7 @@ class HeathazeDataset(Dataset):
             # read distorted image
             rootdistorted = os.path.join(os.path.dirname(os.path.abspath(self.filesnames[idx])),nameformat % f + ".png")
             rootdistorted = rootdistorted.replace('_restored', '_distorted')
-            print('Read Distorted: '+rootdistorted)
+            # print('Read Distorted: '+rootdistorted)
             temp = io.imread(rootdistorted)
             temp = temp.astype('float32')
             if network=='EDVR':
@@ -137,16 +137,16 @@ class HeathazeDataset(Dataset):
                 if curf-halfcurf<=1:
                     rootrestored = os.path.abspath(self.filesnames[halfcurf])
                     groundtruth = io.imread(rootrestored)
-                    print("[input-multiple] Read GroundTruth-1:",rootrestored) 
+                    # print("[input-multiple] Read GroundTruth-1:",rootrestored) 
                 elif curf+halfcurf>=totalframes:
                     rootrestored = os.path.abspath(self.filesnames[totalframes-halfcurf-1])
                     groundtruth = io.imread(rootrestored)
-                    print("[input-multiple] Read GroundTruth-totalframes:",rootrestored)
+                    # print("[input-multiple] Read GroundTruth-totalframes:",rootrestored)
                 else:
                     gt = (curf-halfcurf+1-(self.numframes%2)) + halfcurf - 1
                     rootrestored = os.path.abspath(self.filesnames[gt])
                     groundtruth = io.imread(rootrestored)
-                    print("[input-multiple] Read GroundTruth:",rootrestored)
+                    # print("[input-multiple] Read GroundTruth:",rootrestored)
 
         groundtruth = groundtruth.astype('float32')
         groundtruth = groundtruth/255.
