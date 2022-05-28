@@ -1,7 +1,22 @@
+
+# Author: Ruirui Lin, University of Bristol, United Kingdom.                  
+# Supervisor: Dr Pui Anantrasirichai                                                                 
+# Email: gf19473@bristol.ac.uk                                                
+#                                                                             
+# The source code originally from:                                            
+# Dr Pui Anantrasirichai                                                      
+# [6] X. Wang, C.K. Chan, K. Yu, C. Dong, C. C. Loy,                          
+# “EDVR: Video Restoration with Enhanced Deformable Convolutional Networks”,  
+# arXiv:1905.02716v1 [cs.CV], 7 May 2019.                                     
+#                                                                             
+# Modified by Ruirui Lin for individual project                               
+# "Dealing with Atmospheric Turbulence Distortion in Video Sequences:         
+# Improving Visualisation"                                                    
+#                                                                                                                                                         
+
 from __future__ import print_function, division
 
 import argparse
-from tkinter import Variable
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -10,7 +25,6 @@ import numpy as np
 from edvr_arch import PCDAlignment, EDVR
 import torchvision
 from torchvision import datasets, models, transforms
-#import matplotlib.pyplot as plt
 import time
 import os
 import copy
@@ -21,7 +35,9 @@ from networks import UnetGenerator
 import shutil
 from PIL import Image
 import gc
-# from torch.autograd import Variable
+import matplotlib.pyplot as plt
+from math import log10, sqrt
+import cv2
 
 gc.collect()
 
@@ -45,6 +61,19 @@ parser.add_argument('--with_tsa', action='store_true', help='For EDVR model')
 parser.add_argument('--with_predeblur', action='store_true', help='For EDVR model')
 parser.add_argument('--topleft', action='store_true', help='crop using top left')
 parser.add_argument('--num_feat',default=16, help='features for pcd')
+parser.add_argument('--readgtr',type=str,default='firstframe', help='method for reading groundtruth')
+
+# firstframe: reading the first frame as groundtruth
+# middleframe: reading the middle frame as groundtruth
+
+parser.add_argument('--lossgraph',default='false', help='loss function graph')
+parser.add_argument('--resize_height',type=int,default=384,help='resize for modifying unetdepth')
+parser.add_argument('--resize_width',type=int,default=512, help='resize for modifying unetdepth')
+
+# inputtype: Frame or Video
+parser.add_argument('--inputtype',default='Frame', help='for Video Stream Input')
+parser.add_argument('--videoDirIn',default='./datasets/distorted.mp4/', help='Video Stream Processing')
+parser.add_argument('--videoDirOut',default='results/video.avi',help='Video Stream Processing')
 args = parser.parse_args()
 
 
@@ -65,6 +94,14 @@ with_tsa = args.with_tsa
 with_predeblur = args.with_predeblur
 topleft = args.topleft
 num_feat = args.num_feat
+readgtr = args.readgtr
+lossgraph = args.lossgraph
+resize_height = args.resize_height
+resize_width = args.resize_width
+inputtype = args.inputtype
+videoDirIn = args.videoDirIn
+videoDirOut = args.videoDirOut
+
 # root_distorted='datasets/van_distorted'
 # root_restored='datasets/van_restored'
 # resultDir = 'results'
@@ -110,11 +147,9 @@ class HeathazeDataset(Dataset):
             rangef = range(curf-halfcurf + 1 - (self.numframes % 2), curf+halfcurf+1)
         # print("rangef:",rangef)
 
-        # print(rangef)
         dig = len(subname[-1])-4
         nameformat = '%0'+str(dig)+'d'
-        # print("nameformat:",nameformat)
-        # print('rangef '+str(rangef))
+
         for f in rangef:
             # read distorted image
             rootdistorted = os.path.join(os.path.dirname(os.path.abspath(self.filesnames[idx])),nameformat % f + ".png")
@@ -140,19 +175,34 @@ class HeathazeDataset(Dataset):
         else:
             if self.numframes == 1:
                 groundtruth = io.imread(os.path.join(self.root_restored,subname[-1]))
-            else:
+            elif readgtr == 'firstframe':
                 if curf-halfcurf<=1:
                     rootrestored = os.path.abspath(self.filesnames[self.numframes-1])
                     groundtruth = io.imread(rootrestored)
-                    # print("[input: multiple] Read GroundTruth:",rootrestored)
+                    # print("[input: multiple] Read first GroundTruth:",rootrestored)
                 elif curf+halfcurf>=totalframes:
                     rootrestored = os.path.abspath(self.filesnames[totalframes-1])
                     groundtruth = io.imread(rootrestored)
-                    # print("[input: multiple] Read GroundTruth:",rootrestored)
+                    # print("[input: multiple] Read first GroundTruth:",rootrestored)
                 else:
-                    rootrestored = os.path.abspath(self.filesnames[(curf-halfcurf+1-(self.numframes%2))+self.numframes-2])
+                    gt = (curf-halfcurf+1-(self.numframes%2)) + self.numframes-2
+                    rootrestored = os.path.abspath(self.filesnames[gt])
                     groundtruth = io.imread(rootrestored)
-                    # print("[input: multiple] Read GroundTruth:",rootrestored)
+                    # print("[input: multiple] Read first GroundTruth:",rootrestored)
+            elif readgtr == 'middleframe':
+                if curf-halfcurf<=1:
+                    rootrestored = os.path.abspath(self.filesnames[halfcurf])
+                    groundtruth = io.imread(rootrestored)
+                    # print("[input: multiple] Read middle GroundTruth:",rootrestored)
+                elif curf+halfcurf>=totalframes:
+                    rootrestored = os.path.abspath(self.filesnames[totalframes-halfcurf-1])
+                    groundtruth = io.imread(rootrestored)
+                    # print("[input: multiple] Read middle GroundTruth:",rootrestored)
+                else:
+                    gt = (curf-halfcurf+1-(self.numframes%2)) + halfcurf - 1
+                    rootrestored = os.path.abspath(self.filesnames[gt])
+                    groundtruth = io.imread(rootrestored)
+                    # print("[input: multiple] Read middle GroundTruth:",rootrestored)
 
         groundtruth = groundtruth.astype('float32')
         groundtruth = groundtruth/255.
@@ -275,7 +325,198 @@ def readimage(filename, root_distorted, numframes=3, network='unet'):
         image = normmid(image)
     image = image.unsqueeze(0)
     return image
+
+def PSNR(gt, pred):
+    mse = np.mean((gt - pred) ** 2)
+    if(mse == 0):  # MSE is zero means no noise is present in the signal .
+                  # Therefore PSNR have no importance.
+        return 100
+    max_pixel = 255.0
+    psnr = 20 * log10(max_pixel / sqrt(mse))
+    return psnr
+
+def SSIM(y_true, y_pred):
+  u_true = np.mean(y_true)
+  u_pred = np.mean(y_pred)
+  var_true = np.var(y_true)
+  var_pred = np.var(y_pred)
+  std_true = np.sqrt(var_true)
+  std_pred = np.sqrt(var_pred)
+  c1 = np.square(0.01 * 7)
+  c2 = np.square(0.03 * 7)
+  ssim = (2 * u_true * u_pred + c1) * (2 * std_pred * std_true + c2)
+  denom = (u_true ** 2 + u_pred ** 2 + c1) * (var_pred + var_true + c2)
+  return ssim / denom
+
+def qualityassess(path_pred, path_res):
+    list_psnr = []
+    list_ssim = []
+    filesnames = glob.glob(os.path.join(path_res,'*.png'))
+    for i in range(len(filesnames)):
+        curfile = filesnames[i]
+        subname = curfile.split("\\")
+        # open ground truth image path
+        gt = Image.open(path_res + subname[1])
+        # open result image path
+        pred = Image.open(path_pred + subname[1])
+        gt = np.array(gt)
+        pred = np.array(pred)
+        psnrvalue = PSNR(gt,pred)
+        ssimvalue = SSIM(gt,pred)
+        list_psnr.append(psnrvalue)
+        list_ssim.append(ssimvalue)
+    # print(list_psnr)
+    print('average psnr:',np.mean(list_psnr))
+    print('average ssim:',np.mean(list_ssim))
+
+
+# x-t direction rippled image
+def y_append(path, num, height):
+    '''num: total number of frames
+       height: image height
+    '''
+    dirs = os.listdir(path)
+    output_image = np.zeros((height,num,3), np.uint8)
+    indout = 0
+    for item in dirs:
+        if os.path.isfile(path+item):
+            img = cv2.imread(path+item)
+            column_y = img[:,100]
+            output_image[:,indout,:] = column_y
+            indout = indout + 1
+    cv2.imshow('x-t image',output_image)
+    cv2.imwrite('x-t.jpg', output_image)
+    cv2.waitKey(0)  
+
+# y-t direction rippled image
+def x_append(path, num, width):
+    '''num: total number of frames
+       width: image width
+    '''
+    dirs = os.listdir(path)
+    output_image = np.zeros((num,width,3), np.uint8)
+    indout = 0
+    for item in dirs:
+        if os.path.isfile(path+item):
+            img = cv2.imread(path+item)
+            row_x = img[250,:]
+            output_image[indout,:,:] = row_x
+            indout = indout + 1
+    cv2.imshow('y-t image',output_image)
+    cv2.imwrite('y-t.jpg', output_image)
+    cv2.waitKey(0)
+
+def resizeimage(root_distorted, root_restored, width, height):
+    print("[INFO] resizing distorted images")
+    dirs_dis = os.listdir(root_distorted)
+    for item in dirs_dis:
+        if os.path.isfile(root_distorted+'/'+item):
+            im = Image.open(root_distorted+'/'+item)
+            f, e = os.path.splitext(root_distorted+'/'+item)
+            imResize = im.resize((width,height), Image.ANTIALIAS)
+            imResize.save(f + '.png', 'PNG', quality=90)
+    print("[INFO] resizing restored images")
+    dirs_res = os.listdir(root_restored)
+    for item in dirs_res:
+        if os.path.isfile(root_restored+'/'+item):
+            im = Image.open(root_restored+'/'+item)
+            f, e = os.path.splitext(root_restored+'/'+item)
+            imResize = im.resize((width,height), Image.ANTIALIAS)
+            imResize.save(f + '.png', 'PNG', quality=90)
+
+def video_to_frames(input_loc, output_loc):
+    """Extract frames from input video file
+    and save them as separate frames in an output directory.
+    Args:
+        input_loc - Input video file.
+        output_loc - Output directory to save the frames.
+    """
+
+    if not os.path.exists(output_loc):
+        os.mkdir(output_loc)
+    # Log the time
+    time_start = time.time()
+    # Start capturing the feed
+    cap = cv2.VideoCapture(input_loc)
+    # Find the number of frames
+    video_length = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    print ("Number of frames: ", video_length)
+    count = 0
+    print ("Converting video..\n")
+    # Start converting the video
+    while cap.isOpened():
+        # Extract the frame
+        ret, frame = cap.read()
+        # skip malformed frames if present
+        if not ret:  
+            continue
+        # Write the results back to output location.
+        cv2.imwrite(output_loc + "/%#05d.jpg" % (count+1), frame)
+        count = count + 1
+        # If there are no more frames left
+        if (count > (video_length-1)):
+            # Log the time again
+            time_end = time.time()
+            # Release the feed
+            cap.release()
+            # Print stats
+            print ("Done extracting frames.\n%d frames extracted" % count)
+            print ("It took %d seconds for conversion." % (time_end-time_start))
+            break
+
+def frames_to_video(pathIn,pathOut,fps):
+    '''Generate video stream file from input frames 
+   
+    Args:
+        pathIn - Input path of result frames
+        pathOut - Output path of generated video stream
+        fps - Framerate of the created video stream
+    '''
+
+    frame_array = []
+    dirs = os.listdir(pathIn)
+    # print(dirs)
+    for i in dirs:
+        if os.path.isfile(pathIn+i):
+            # Log the time
+            time_start = time.time()
+            filename=pathIn+i
+            print(filename)
+            #reading each files
+            img = cv2.imread(filename)
+            (height, width, layers) = img.shape
+            size = (width,height)
+            # print(filename)
+            #inserting the frames into an image array
+            frame_array.append(img)
+
+    # Initialize the video writer and save the frames to a video file
+    out = cv2.VideoWriter(pathOut,cv2.VideoWriter_fourcc(*'DIVX'), fps, size)
+
+    for i in range(len(frame_array)):
+        # writing to a image array
+        out.write(frame_array[i])
+    # Log the time again
+    time_end = time.time()
+    print ("Done converting frames to video stream")
+    print ("It took %d seconds for conversion." % (time_end-time_start))
+    # Release the VideoWriter
+    out.release()
+
 # =====================================================================
+# converting video stream to frames
+if inputtype == 'Video':
+    input_loc = videoDirIn
+    output_loc = root_distorted
+    print("[INFO] Converting Video Stream to Frames...")
+    video_to_frames(input_loc, output_loc)
+
+if unetdepth > 5:
+    print("[INFO] Data Preparation")
+    # resize restored and distorted images when modifying unet depth
+    # image size must be divisible by 2^(unetdepth)
+    # e.g., image size of 512x384
+    resizeimage(root_distorted,root_restored,resize_width,resize_height)
 
 # data loader
 print("[INFO] Data Start Loading...")
@@ -315,6 +556,7 @@ num_epochs=maxepoch
 since = time.time()
 best_model_wts = copy.deepcopy(model.state_dict())
 best_acc = 100000000.0
+train_loss = []
 for epoch in range(num_epochs+1):
     # print('Epoch {}/{}'.format(epoch, num_epochs - 1))
     # Each epoch has a training and validation phase
@@ -330,23 +572,22 @@ for epoch in range(num_epochs+1):
             sample = heathaze_dataset[i]
             inputs = sample['image'].to(device)
             labels = sample['groundtruth'].to(device)
-            # inputs = Variable(inputs,requires_grad=True)
-            # labels = Variable(labels,requires_grad=True)
-            
             # zero the parameter gradients
             optimizer.zero_grad()
             # forward
             # track history if only in train
-            with torch.set_grad_enabled(phase == 'train'):
-            # with torch.no_grad():
+            # with torch.set_grad_enabled(phase == 'train'):
+            with torch.no_grad():
                 outputs = model(inputs)
                 loss = criterion(outputs, labels)
-                # loss = Variable(loss,requires_grad=True)
+                loss.requires_grad_(True)
                 loss.backward()
                 optimizer.step()
             # statistics
             running_loss += loss.item() * inputs.size(0)
         epoch_loss = running_loss / len(heathaze_dataset)
+        if lossgraph == 'true':
+            train_loss.append(epoch_loss)
         # print('\n')
         print('[Epoch] ' + str(epoch),':' + '[Loss] ' + str(epoch_loss))
         # print('\n')
@@ -356,6 +597,16 @@ for epoch in range(num_epochs+1):
         if (epoch>10) and (epoch_loss < best_acc):
             best_acc = epoch_loss
             torch.save(model.state_dict(), os.path.join(resultDir, 'best_'+savemodelname+'.pth.tar'))
+
+if lossgraph == 'true':
+    # plot loss graph
+    plt.figure(figsize=(10,5))
+    plt.title('Training Loss')
+    plt.plot(train_loss,label="loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.legend()
+    plt.show()
 
 # =======TESTING==============================================================
 resultDirOutImg = os.path.join(resultDir,savemodelname)
@@ -385,3 +636,32 @@ for i in range(len(filesnames)):
         output = output.transpose((1, 2, 0))
         output = (output*0.5 + 0.5)*255
         io.imsave(os.path.join(resultDirOutImg, subname[-1]), output.astype(np.uint8))
+
+# =====================================================================
+# converting result frames to video stream
+if inputtype == 'Video':
+    pathIn = './results/model/'
+    pathOut = 'video.avi'
+    fps = 25.0
+    print("[INFO] Converting Frames to Video Stream file...")
+    frames_to_video(pathIn,pathOut,fps)
+
+
+# ========Assess Quality=================================================
+print("[INFO] Assessing Quality of the Mitigated Result...")
+qualityassess(resultDir+'/'+savemodelname+'/',root_distorted+'/')
+
+'''generate x-t or y-t direction images'''
+img = cv2.imread(resultDir+'/'+savemodelname+'/')
+# print(img.shape)
+(height,width,depth) = img.shape
+'''x-t direction rippled image'''
+# y_append(resultDir+'/'+savemodelname+'/',len(filesnames),height)
+'''y-t direction rippled image'''
+# x_append(resultDir+'/'+savemodelname+'/',len(filesnames),width)
+
+
+
+
+
+
