@@ -15,6 +15,6 @@ conda activate py37
 
 cd /user/work/USERNAME/PCDUNet/
 
-python main_heathaze.py --NoNorm --network EDVR --resultDir AtmPCDUNet
+python main_heathaze.py --network PCDUNet --resultDir AtmPCDUNet
 
 
