@@ -1,8 +1,3 @@
-
-# Author: Ruirui Lin, University of Bristol, United Kingdom.                  
-# Supervisor: Dr Pui Anantrasirichai                                                                 
-# Email: gf19473@bristol.ac.uk                                                
-#                                                                             
 # The source code originally from:                                            
 # Dr Pui Anantrasirichai                                                      
 # [6] X. Wang, C.K. Chan, K. Yu, C. Dong, C. C. Loy,                          
@@ -22,7 +17,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.optim import lr_scheduler
 import numpy as np
-from edvr_arch import PCDAlignment, EDVR
+from edvr_arch import PCDAlignment, PCDUNet
 import torchvision
 from torchvision import datasets, models, transforms
 import time
@@ -54,11 +49,9 @@ parser.add_argument('--savemodelname', type=str, default='model')
 parser.add_argument('--maxepoch', type=int, default=200)
 parser.add_argument('--NoNorm', action='store_false', help='Run test only')
 parser.add_argument('--deform', action='store_true', help='Run test only')
-parser.add_argument('--network', type=str, default='EDVR')
+parser.add_argument('--network', type=str, default='PCDUNet') 
 parser.add_argument('--retrain', action='store_true')
 parser.add_argument('--recon_network', type=str, default='resnet', help='For EDVR model')
-parser.add_argument('--with_tsa', action='store_true', help='For EDVR model')
-parser.add_argument('--with_predeblur', action='store_true', help='For EDVR model')
 parser.add_argument('--topleft', action='store_true', help='crop using top left')
 parser.add_argument('--num_feat',default=16, help='features for pcd')
 parser.add_argument('--readgtr',type=str,default='firstframe', help='method for reading groundtruth')
@@ -157,12 +150,12 @@ class HeathazeDataset(Dataset):
             # print('Read Distorted: '+rootdistorted)
             temp = io.imread(rootdistorted)
             temp = temp.astype('float32')
-            if network=='EDVR':
+            if network=='PCDUNet':
                 temp = temp[..., np.newaxis]
             if f==rangef[0]:
                 image = temp/255.
             else:
-                if network=='EDVR':
+                if network=='PCDUNet':
                     image = np.append(image,temp/255.,axis=3)
                 else:
                     image = np.append(image,temp/255.,axis=2)
@@ -246,7 +239,7 @@ class ToTensor(object):
         # swap color axis because
         # numpy image: H x W x C
         # torch image: C x H x W
-        if network=='EDVR':
+        if network=='PCDUNet':
             image = image.transpose((3, 2, 0, 1))
         else:
             image = image.transpose((2, 0, 1))
@@ -254,7 +247,7 @@ class ToTensor(object):
         image = torch.from_numpy(image.copy())
         groundtruth = torch.from_numpy(groundtruth.copy())
         # image
-        if network=='EDVR':
+        if network=='PCDUNet':
             image = (image-0.5)/0.5
         else:
             vallist = [0.5]*image.shape[0]
@@ -303,21 +296,21 @@ def readimage(filename, root_distorted, numframes=3, network='unet'):
         # read distorted image
         temp = io.imread(os.path.join(root_distorted,nameformat % f + ".png"))
         temp = temp.astype('float32')
-        if network=='EDVR':
+        if network=='PCDUNet':
             temp = temp[..., np.newaxis]
         if f==rangef[0]:
             image = temp/255.
         else:
-            if network=='EDVR':
+            if network=='PCDUNet':
                 image = np.append(image,temp/255.,axis=3)
             else:
                 image = np.append(image,temp/255.,axis=2)
-    if network=='EDVR':
+    if network=='PCDUNet':
         image = image.transpose((3, 2, 0, 1))
     else:
         image = image.transpose((2, 0, 1))
     image = torch.from_numpy(image)
-    if network=='EDVR':
+    if network=='PCDUNet':
         image = (image-0.5)/0.5
     else:
         vallist = [0.5]*image.shape[0]
@@ -532,10 +525,9 @@ else:
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 print("[INFO] Unet Generating...")
-if network=='EDVR':
-    model = EDVR(num_in_ch=3,num_out_ch=3,num_feat=num_feat,num_frame=numframes,deformable_groups=8,num_extract_block=5,
-                 num_reconstruct_block=10,center_frame_idx=None,hr_in=True,with_predeblur=False,with_tsa=False,
-                 num_downs= unetdepth)
+if network=='PCDUNet':
+    model = PCDUNet(num_in_ch=3,num_out_ch=3,num_feat=num_feat,num_frame=numframes,deformable_groups=8,num_extract_block=5,
+                 num_reconstruct_block=10,center_frame_idx=None,hr_in=True, num_downs= unetdepth, deformable=deform, norm_layer=NoNorm)
 else:
     model = UnetGenerator(input_nc=numframes*3, output_nc=3, num_downs=unetdepth, deformable=deform, norm_layer=NoNorm)
 if retrain:
@@ -612,10 +604,9 @@ if lossgraph == 'true':
 resultDirOutImg = os.path.join(resultDir,savemodelname)
 if not os.path.exists(resultDirOutImg):
     os.mkdir(resultDirOutImg)
-if network=='EDVR':
-    model = EDVR(num_in_ch=3,num_out_ch=3,num_feat=num_feat,num_frame=numframes,deformable_groups=8,num_extract_block=5,
-                 num_reconstruct_block=10,center_frame_idx=None,hr_in=True,with_predeblur=False,with_tsa=False,
-                 num_downs= unetdepth)
+if network=='PCDUNet':
+    model = PCDUNet(num_in_ch=3,num_out_ch=3,num_feat=num_feat,num_frame=numframes,deformable_groups=8,num_extract_block=5,
+                 num_reconstruct_block=10,center_frame_idx=None,hr_in=True,num_downs= unetdepth, deformable=deform, norm_layer=NoNorm)
 else:
     model = UnetGenerator(input_nc=numframes*3, output_nc=3, num_downs=unetdepth, deformable=deform, norm_layer=NoNorm)
 model.load_state_dict(torch.load(os.path.join(resultDir,'best_'+savemodelname+'.pth.tar'),map_location=device))

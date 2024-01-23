@@ -1,8 +1,4 @@
-
-# Author: Ruirui Lin, University of Bristol, United Kingdom.                  
-# Supervisor: Dr Pui Anantrasirichai                                                                 
-# Email: gf19473@bristol.ac.uk                                                
-#                                                                             
+                                                                         
 # The source code originally from:                                                                                              
 # [6] X. Wang, C.K. Chan, K. Yu, C. Dong, C. C. Loy,                          
 # “EDVR: Video Restoration with Enhanced Deformable Convolutional Networks”,  
@@ -116,157 +112,12 @@ class PCDAlignment(nn.Module):
         return feat
 
 
-class TSAFusion(nn.Module):
-    """Temporal Spatial Attention (TSA) fusion module.
-
-    Temporal: Calculate the correlation between center frame and
-        neighboring frames;
-    Spatial: It has 3 pyramid levels, the attention is similar to SFT.
-        (SFT: Recovering realistic texture in image super-resolution by deep
-            spatial feature transform.)
-
-    Args:
-        num_feat (int): Channel number of middle features. Default: 64.
-        num_frame (int): Number of frames. Default: 5.
-        center_frame_idx (int): The index of center frame. Default: 2.
-    """
-
-    def __init__(self, num_feat=64, num_frame=5, center_frame_idx=2):
-        super(TSAFusion, self).__init__()
-        self.center_frame_idx = center_frame_idx
-        # temporal attention (before fusion conv)
-        self.temporal_attn1 = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
-        self.temporal_attn2 = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
-        self.feat_fusion = nn.Conv2d(num_frame * num_feat, num_feat, 1, 1)
-
-        # spatial attention (after fusion conv)
-        self.max_pool = nn.MaxPool2d(3, stride=2, padding=1)
-        self.avg_pool = nn.AvgPool2d(3, stride=2, padding=1)
-        self.spatial_attn1 = nn.Conv2d(num_frame * num_feat, num_feat, 1)
-        self.spatial_attn2 = nn.Conv2d(num_feat * 2, num_feat, 1)
-        self.spatial_attn3 = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
-        self.spatial_attn4 = nn.Conv2d(num_feat, num_feat, 1)
-        self.spatial_attn5 = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
-        self.spatial_attn_l1 = nn.Conv2d(num_feat, num_feat, 1)
-        self.spatial_attn_l2 = nn.Conv2d(num_feat * 2, num_feat, 3, 1, 1)
-        self.spatial_attn_l3 = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
-        self.spatial_attn_add1 = nn.Conv2d(num_feat, num_feat, 1)
-        self.spatial_attn_add2 = nn.Conv2d(num_feat, num_feat, 1)
-
-        self.lrelu = nn.LeakyReLU(negative_slope=0.1, inplace=True)
-        self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
-
-    def forward(self, aligned_feat):
-        """
-        Args:
-            aligned_feat (Tensor): Aligned features with shape (b, t, c, h, w).
-
-        Returns:
-            Tensor: Features after TSA with the shape (b, c, h, w).
-        """
-        b, t, c, h, w = aligned_feat.size()
-        # temporal attention
-        embedding_ref = self.temporal_attn1(aligned_feat[:, self.center_frame_idx, :, :, :].clone())
-        embedding = self.temporal_attn2(aligned_feat.view(-1, c, h, w))
-        embedding = embedding.view(b, t, -1, h, w)  # (b, t, c, h, w)
-
-        corr_l = []  # correlation list
-        for i in range(t):
-            emb_neighbor = embedding[:, i, :, :, :]
-            corr = torch.sum(emb_neighbor * embedding_ref, 1)  # (b, h, w)
-            corr_l.append(corr.unsqueeze(1))  # (b, 1, h, w)
-        corr_prob = torch.sigmoid(torch.cat(corr_l, dim=1))  # (b, t, h, w)
-        corr_prob = corr_prob.unsqueeze(2).expand(b, t, c, h, w)
-        corr_prob = corr_prob.contiguous().view(b, -1, h, w)  # (b, t*c, h, w)
-        aligned_feat = aligned_feat.view(b, -1, h, w) * corr_prob
-
-        # fusion
-        feat = self.lrelu(self.feat_fusion(aligned_feat))
-
-        # spatial attention
-        attn = self.lrelu(self.spatial_attn1(aligned_feat))
-        attn_max = self.max_pool(attn)
-        attn_avg = self.avg_pool(attn)
-        attn = self.lrelu(self.spatial_attn2(torch.cat([attn_max, attn_avg], dim=1)))
-        # pyramid levels
-        attn_level = self.lrelu(self.spatial_attn_l1(attn))
-        attn_max = self.max_pool(attn_level)
-        attn_avg = self.avg_pool(attn_level)
-        attn_level = self.lrelu(self.spatial_attn_l2(torch.cat([attn_max, attn_avg], dim=1)))
-        attn_level = self.lrelu(self.spatial_attn_l3(attn_level))
-        attn_level = self.upsample(attn_level)
-
-        attn = self.lrelu(self.spatial_attn3(attn)) + attn_level
-        attn = self.lrelu(self.spatial_attn4(attn))
-        attn = self.upsample(attn)
-        attn = self.spatial_attn5(attn)
-        attn_add = self.spatial_attn_add2(self.lrelu(self.spatial_attn_add1(attn)))
-        attn = torch.sigmoid(attn)
-
-        # after initialization, * 2 makes (attn * 2) to be close to 1.
-        feat = feat * attn * 2 + attn_add
-        return feat
-
-
-class PredeblurModule(nn.Module):
-    """Pre-dublur module.
-
-    Args:
-        num_in_ch (int): Channel number of input image. Default: 3.
-        num_feat (int): Channel number of intermediate features. Default: 64.
-        hr_in (bool): Whether the input has high resolution. Default: False.
-    """
-
-    def __init__(self, num_in_ch=3, num_feat=64, hr_in=False):
-        super(PredeblurModule, self).__init__()
-        self.hr_in = hr_in
-
-        self.conv_first = nn.Conv2d(num_in_ch, num_feat, 3, 1, 1)
-        if self.hr_in:
-            # downsample x4 by stride conv
-            self.stride_conv_hr1 = nn.Conv2d(num_feat, num_feat, 3, 2, 1)
-            self.stride_conv_hr2 = nn.Conv2d(num_feat, num_feat, 3, 2, 1)
-
-        # generate feature pyramid
-        self.stride_conv_l2 = nn.Conv2d(num_feat, num_feat, 3, 2, 1)
-        self.stride_conv_l3 = nn.Conv2d(num_feat, num_feat, 3, 2, 1)
-
-        self.resblock_l3 = ResidualBlockNoBN(num_feat=num_feat)
-        self.resblock_l2_1 = ResidualBlockNoBN(num_feat=num_feat)
-        self.resblock_l2_2 = ResidualBlockNoBN(num_feat=num_feat)
-        self.resblock_l1 = nn.ModuleList([ResidualBlockNoBN(num_feat=num_feat) for i in range(5)])
-
-        self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
-        self.lrelu = nn.LeakyReLU(negative_slope=0.1, inplace=True)
-
-    def forward(self, x):
-        feat_l1 = self.lrelu(self.conv_first(x))
-        if self.hr_in:
-            feat_l1 = self.lrelu(self.stride_conv_hr1(feat_l1))
-            feat_l1 = self.lrelu(self.stride_conv_hr2(feat_l1))
-
-        # generate feature pyramid
-        feat_l2 = self.lrelu(self.stride_conv_l2(feat_l1))
-        feat_l3 = self.lrelu(self.stride_conv_l3(feat_l2))
-
-        feat_l3 = self.upsample(self.resblock_l3(feat_l3))
-        feat_l2 = self.resblock_l2_1(feat_l2) + feat_l3
-        feat_l2 = self.upsample(self.resblock_l2_2(feat_l2))
-
-        for i in range(2):
-            feat_l1 = self.resblock_l1[i](feat_l1)
-        feat_l1 = feat_l1 + feat_l2
-        for i in range(2, 5):
-            feat_l1 = self.resblock_l1[i](feat_l1)
-        return feat_l1
-
-
 # @ARCH_REGISTRY.register()
-class EDVR(nn.Module):
-    """EDVR network structure for video super-resolution.
+class PCDUNet(nn.Module):
+    """
+    Modified to PCDUNet
 
-    Now only support X4 upsampling factor.
-    Paper:
+    Source Paper:
         EDVR: Video Restoration with Enhanced Deformable Convolutional Networks
 
     Args:
@@ -282,9 +133,10 @@ class EDVR(nn.Module):
         center_frame_idx (int): The index of center frame. Frame counting from
             0. Default: Middle of input frames.
         hr_in (bool): Whether the input has high resolution. Default: False.
-        with_predeblur (bool): Whether has predeblur module.
-            Default: False.
-        with_tsa (bool): Whether has TSA module. Default: True.
+        num_downs (int): the number of downsamplings in UNet. For example, # if |num_downs| == 7,
+                                image of size 128x128 will become of size 1x1 # at the bottleneck
+        deform (bool): deformable convolution
+        norm_layer (bool): normalization layer
     """
 
     def __init__(self,
@@ -297,12 +149,10 @@ class EDVR(nn.Module):
                  num_reconstruct_block=10,
                  center_frame_idx=None,
                  hr_in=False,
-                 with_predeblur=False,
-                 with_tsa=True,
                  num_downs = 5,
                  deformable = False,
                  norm_layer = True):
-        super(EDVR, self).__init__()
+        super(PCDUNet, self).__init__()
         if center_frame_idx is None:
             self.center_frame_idx = num_frame // 2
         else:
@@ -311,12 +161,8 @@ class EDVR(nn.Module):
         self.with_predeblur = with_predeblur
         self.with_tsa = with_tsa
 
-        # extract features for each frame
-        if self.with_predeblur:
-            self.predeblur = PredeblurModule(num_feat=num_feat, hr_in=self.hr_in)
-            self.conv_1x1 = nn.Conv2d(num_feat, num_feat, 1, 1)
-        else:
-            self.conv_first = nn.Conv2d(num_in_ch, num_feat, 3, 1, 1)
+      
+        self.conv_first = nn.Conv2d(num_in_ch, num_feat, 3, 1, 1)
 
         # extract pyramid features
         self.feature_extraction = make_layer(ResidualBlockNoBN, num_extract_block, num_feat=num_feat)
@@ -327,10 +173,8 @@ class EDVR(nn.Module):
 
         # pcd and tsa module
         self.pcd_align = PCDAlignment(num_feat=num_feat, deformable_groups=deformable_groups)
-        if self.with_tsa:
-            self.fusion = TSAFusion(num_feat=num_feat, num_frame=num_frame, center_frame_idx=self.center_frame_idx)
-        else:
-            self.fusion = nn.Conv2d(num_frame * num_feat, num_feat, 1, 1)
+        
+        self.fusion = nn.Conv2d(num_frame * num_feat, num_feat, 1, 1)
 
         # reconstruction
         self.reconstruction = make_layer(ResidualBlockNoBN, num_reconstruct_block, num_feat=num_feat)
@@ -345,7 +189,7 @@ class EDVR(nn.Module):
         self.lrelu = nn.LeakyReLU(negative_slope=0.1, inplace=True)
 
         # unet
-        ngf = 64
+        ngf = 64 # the number of filters in the last conv layer
         unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer, innermost=True, deformable=deformable)  # add the innermost layer
         for i in range(num_downs - 5):          # add intermediate layers with ngf * 8 filters
             unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, use_dropout=False, deformable=deformable)

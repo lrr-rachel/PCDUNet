@@ -1,16 +1,4 @@
-# Author: Ruirui Lin, University of Bristol, United Kingdom.                  
-# Supervisor: Dr Pui Anantrasirichai                                                                 
-# Email: gf19473@bristol.ac.uk                                                
-#                                                                             
-# The source code originally from:   
-# [47] O. Ronneberger, P. Fischer, and T. Brox, 
-# “U-Net: Convolutional Networks for Biomedical Image Segmentation,” arXiv.org, 18-May-2015.                                                                                                           
-#                                                                             
-# Modified by Ruirui Lin for individual project                               
-# "Dealing with Atmospheric Turbulence Distortion in Video Sequences:         
-# Improving Visualisation"                                                    
-#   
-
+                                                                                                        
 import torch
 import torch.nn as nn
 from torch.nn import init
