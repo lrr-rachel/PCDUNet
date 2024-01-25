@@ -35,25 +35,20 @@ parser.add_argument('--root_restored', type=str, default='/user/home/gf19473/scr
 parser.add_argument('--root_test', type=str, default='/user/home/gf19473/scratch/lowlight_dataset/input/', help='save output images')
 
 # parser.add_argument('--root_restored', type=str, default='', help='save output images')
-parser.add_argument('--resultDir', type=str, default='pcdunet_frame5_light10', help='save output images')
+parser.add_argument('--resultDir', type=str, default='pcdunet_frame5', help='save output images')
 parser.add_argument('--unetdepth', type=int, default=5, metavar='N',  help='number of epochs to train (default: 10)')
 parser.add_argument('--numframes', type=int, default=5, metavar='N',  help='number of epochs to train (default: 10)')
 parser.add_argument('--cropsize', type=int, default=512)
 parser.add_argument('--savemodelname', type=str, default='model')
 parser.add_argument('--maxepoch', type=int, default=10)
 parser.add_argument('--NoNorm', action='store_false', help='Run test only')
-parser.add_argument('--deform', action='store_true', help='Run test only')
 parser.add_argument('--network', type=str, default='PCDUNet')
 parser.add_argument('--retrain', action='store_true')
 parser.add_argument('--recon_network', type=str, default='resnet', help='For PCDUNet model')
 parser.add_argument('--topleft', action='store_true', help='crop using top left')
 parser.add_argument('--num_feat',default=16, help='features for pcd')
 parser.add_argument('--readgtr',type=str,default='middleframe', help='method for reading groundtruth')
-parser.add_argument('--testonly', action='store_true', help='no train')
 parser.add_argument('--lowlightmode', action='store_true', help='using lowlight dataset')
-
-# firstframe: reading the first frame as groundtruth
-# middleframe: reading the middle frame as groundtruth
 
 parser.add_argument('--lossgraph',default='false', help='loss function graph')
 parser.add_argument('--resize_height',type=int,default=512,help='resize for modifying unetdepth')
@@ -80,12 +75,9 @@ cropsize = args.cropsize
 savemodelname = args.savemodelname
 maxepoch = args.maxepoch
 NoNorm = args.NoNorm
-deform = args.deform
 network = args.network
 retrain = args.retrain
 recon_network = args.recon_network
-with_tsa = args.with_tsa
-with_predeblur = args.with_predeblur
 topleft = args.topleft
 num_feat = args.num_feat
 readgtr = args.readgtr
@@ -95,21 +87,13 @@ resize_width = args.resize_width
 inputtype = args.inputtype
 videoDirIn = args.videoDirIn
 videoDirOut = args.videoDirOut
-root_test = args.root_test
 lowlightmode = args.lowlightmode
-testonly = args.testonly
 
-# root_distorted='datasets/van_distorted'
-# root_restored='datasets/van_restored'
-# resultDir = 'results'
 if not os.path.exists(resultDir):
     os.mkdir(resultDir)
 
 train_txt_file = '/user/home/bv18502/scratch/video_enhance/datasets/4_vilab/train_list.txt'
 test_txt_file = '/user/home/bv18502/scratch/video_enhance/datasets/4_vilab/test_list.txt'
-
-output_file = 'epochtest_' + resultDir + '.txt'
-
 
 class LowLightDataset(Dataset):
     """Face Landmarks dataset."""
@@ -133,9 +117,9 @@ class LowLightDataset(Dataset):
             # print("Data folder restored:", data_folder_restored)
 
             self.filesnames.extend(glob.glob(os.path.join(data_folder_restored, 'normal_light_10', '*.png')))
-            # self.filesnames.extend(glob.glob(os.path.join(data_folder_restored, 'normal_light_20', '*.png')))
+            self.filesnames.extend(glob.glob(os.path.join(data_folder_restored, 'normal_light_20', '*.png')))
             self.distortednames.extend(glob.glob(os.path.join(data_folder_distorted, 'low_light_10', '*.png')))
-            # self.distortednames.extend(glob.glob(os.path.join(data_folder_distorted, 'low_light_20', '*.png')))
+            self.distortednames.extend(glob.glob(os.path.join(data_folder_distorted, 'low_light_20', '*.png')))
 
         print("Length restored = ", len(self.filesnames))
         print("Length distorted = ", len(self.distortednames))
@@ -150,7 +134,7 @@ class LowLightDataset(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        subname = self.filesnames[idx].split("\\")
+        # subname = self.filesnames[idx].split("\\")
         # curf = int(subname[-1][:-4])
         curf = idx+1
 
@@ -172,8 +156,8 @@ class LowLightDataset(Dataset):
         else:
             rangef = range(curf-halfcurf + 1 - (self.numframes % 2), curf+halfcurf+1)
 
-        dig = len(subname[-1])-4
-        nameformat = '%0'+str(dig)+'d'
+        # dig = len(subname[-1])-4
+        # nameformat = '%0'+str(dig)+'d'
         # print("Rangef: ", rangef)
 
         for f in rangef:
@@ -181,7 +165,6 @@ class LowLightDataset(Dataset):
 
             # print('Read Distorted: '+rootdistorted)
 
-            # temp = io.imread(rootdistorted)
             temp = cv2.imread(rootdistorted, cv2.IMREAD_COLOR)
             # temp = cv2.resize(temp, (resize_width,resize_height))
             temp = temp.astype('float32')
@@ -197,7 +180,6 @@ class LowLightDataset(Dataset):
                     image = np.append(image,temp/255.,axis=2)
 
         rootrestored = self.filesnames[idx]
-        # groundtruth = io.imread(rootrestored)
         groundtruth = cv2.imread(rootrestored, cv2.IMREAD_COLOR)
         # groundtruth = cv2.resize(groundtruth, (resize_width,resize_height),cv2.INTER_CUBIC)
         # print("Read Restored:",rootrestored)
@@ -384,99 +366,6 @@ class RandomFlip(object):
             groundtruth = np.flip(groundtruth,op)
         return {'image': image, 'groundtruth': groundtruth}
 
-def readimage(filename, root_distorted, numframes=3, network='unet'):
-    # read distorted image
-    subname = filename.split("\\")
-    curf = int(subname[-1][:-4])
-    halfcurf = int(numframes/2)
-    if curf==1:
-        rangef = range(1,numframes+1)
-    elif curf==len(filesnames):
-        rangef = range(curf-int(numframes/2)-1, curf+1)
-    else:
-        rangef = range(curf-int(numframes/2), curf+int(numframes/2)+1)
-    if curf-halfcurf<=1:
-        rangef = range(1,numframes+1)
-    elif curf+halfcurf>=len(filesnames):
-        if numframes==1:
-            rangef = range(curf, curf+1)
-        else:
-            rangef = range(len(filesnames)-numframes+1, len(filesnames)+1)
-    else:
-        rangef = range(curf-halfcurf, curf+halfcurf+1)
-    dig = len(subname[-1])-4
-    nameformat = '%0'+str(dig)+'d'
-    for f in rangef:
-        # read distorted image
-        temp = io.imread(os.path.join(root_distorted,nameformat % f + ".png"))
-        temp = temp.astype('float32')
-        if network=='PCDUNet':
-            temp = temp[..., np.newaxis]
-        if f==rangef[0]:
-            image = temp/255.
-        else:
-            if network=='PCDUNet':
-                image = np.append(image,temp/255.,axis=3)
-            else:
-                image = np.append(image,temp/255.,axis=2)
-    if network=='PCDUNet':
-        image = image.transpose((3, 2, 0, 1))
-    else:
-        image = image.transpose((2, 0, 1))
-    image = torch.from_numpy(image)
-    if network=='PCDUNet':
-        image = (image-0.5)/0.5
-    else:
-        vallist = [0.5]*image.shape[0]
-        normmid = transforms.Normalize(vallist, vallist)
-        image = normmid(image)
-    image = image.unsqueeze(0)
-    return image
-
-def PSNR(gt, pred):
-    mse = np.mean((gt - pred) ** 2)
-    if(mse == 0):  # MSE is zero means no noise is present in the signal .
-                  # Therefore PSNR have no importance.
-        return 100
-    max_pixel = 255.0
-    psnr = 20 * log10(max_pixel / sqrt(mse))
-    return psnr
-
-def SSIM(y_true, y_pred):
-  u_true = np.mean(y_true)
-  u_pred = np.mean(y_pred)
-  var_true = np.var(y_true)
-  var_pred = np.var(y_pred)
-  std_true = np.sqrt(var_true)
-  std_pred = np.sqrt(var_pred)
-  c1 = np.square(0.01 * 7)
-  c2 = np.square(0.03 * 7)
-  ssim = (2 * u_true * u_pred + c1) * (2 * std_pred * std_true + c2)
-  denom = (u_true ** 2 + u_pred ** 2 + c1) * (var_pred + var_true + c2)
-  return ssim / denom
-
-def qualityassess(path_pred, path_res):
-    list_psnr = []
-    list_ssim = []
-    filesnames = glob.glob(os.path.join(path_res,'*.png'))
-    for i in range(len(filesnames)):
-        curfile = filesnames[i]
-        subname = curfile.split("\\")
-        # open ground truth image path
-        gt = Image.open(path_res + subname[1])
-        # open result image path
-        pred = Image.open(path_pred + subname[1])
-        gt = np.array(gt)
-        pred = np.array(pred)
-        psnrvalue = PSNR(gt,pred)
-        ssimvalue = SSIM(gt,pred)
-        list_psnr.append(psnrvalue)
-        list_ssim.append(ssimvalue)
-    # print(list_psnr)
-    print('average psnr:',np.mean(list_psnr))
-    print('average ssim:',np.mean(list_ssim))
-
-
 # x-t direction rippled image
 def y_append(path, num, height):
     '''num: total number of frames
@@ -653,125 +542,124 @@ if torch.cuda.is_available():
 # data_loader = DataLoader(heathaze_dataset, batch_size=batch_size)
 
 
-if not testonly:
-    resultDirOutImg = os.path.join(resultDir,savemodelname)
-    if not os.path.exists(resultDirOutImg):
-        os.mkdir(resultDirOutImg)
+resultDirOutImg = os.path.join(resultDir,savemodelname)
+if not os.path.exists(resultDirOutImg):
+    os.mkdir(resultDirOutImg)
 
-    resultDirOut = os.path.join(resultDir,"trainingImg")
-    if not os.path.exists(resultDirOut):
-        os.mkdir(resultDirOut)
+resultDirOut = os.path.join(resultDir,"trainingImg")
+if not os.path.exists(resultDirOut):
+    os.mkdir(resultDirOut)
 
-    print("[INFO] Network Generating...")
-    if network=='PCDUNet':
-        print('PCDUNet')
-        # changed hr_in to False (input size divided by 4)
-        model = PCDUNet(num_in_ch=3,num_out_ch=3,num_feat=num_feat,num_frame=numframes,deformable_groups=8,num_extract_block=5,
-                     num_reconstruct_block=10,center_frame_idx=None,hr_in=True, deformable=deform, num_downs= unetdepth, norm_layer=NoNorm)
-    else:
-        print('Unet')
-        model = UnetGenerator(input_nc=numframes*3, output_nc=3, num_downs=unetdepth, deformable=deform, norm_layer=NoNorm)
-    if retrain:
-        model.load_state_dict(torch.load(os.path.join(resultDir, 'best_'+savemodelname+'.pth.tar'),map_location=device))
-    model = model.to(device)
-    # use all GPUs
-    if torch.cuda.device_count() > 1:
-        model = nn.DataParallel(model)
+print("[INFO] Network Generating...")
+if network=='PCDUNet':
+    print('PCDUNet')
+    # changed hr_in to False (input size divided by 4)
+    model = PCDUNet(num_in_ch=3,num_out_ch=3,num_feat=num_feat,num_frame=numframes,deformable_groups=8,num_extract_block=5,
+                    num_reconstruct_block=10,center_frame_idx=None,hr_in=True, num_downs= unetdepth, norm_layer=NoNorm)
+else:
+    print('Unet')
+    model = UnetGenerator(input_nc=numframes*3, output_nc=3, num_downs=unetdepth, norm_layer=NoNorm)
+if retrain:
+    model.load_state_dict(torch.load(os.path.join(resultDir, 'best_'+savemodelname+'.pth.tar'),map_location=device))
+model = model.to(device)
+# use all GPUs
+if torch.cuda.device_count() > 1:
+    model = nn.DataParallel(model)
 
-    # criterion = nn.MSELoss()
-    criterion = nn.L1Loss()
+# criterion = nn.MSELoss()
+criterion = nn.L1Loss()
 
-    # Observe that all parameters are being optimized
-    optimizer = optim.Adam(model.parameters(), lr=0.0001)
+# Observe that all parameters are being optimized
+optimizer = optim.Adam(model.parameters(), lr=0.0001)
 
-    # Decay LR by a factor of 0.1 every 7 epochs
-    # exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
+# Decay LR by a factor of 0.1 every 7 epochs
+# exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
 
-    # =====================================================================
-    print("[INFO] Start Training...")
-    # Log the time
-    time_start = time.time()
-    num_epochs=maxepoch
-    since = time.time()
-    best_model_wts = copy.deepcopy(model.state_dict())
-    best_acc = 100000000.0
-    train_loss = []
-    for epoch in range(num_epochs+1):
-        # print('Epoch {}/{}'.format(epoch, num_epochs - 1))
-        # Each epoch has a training and validation phase
-        for phase in ['train']:#, 'val']:
-            if phase == 'train':
-                model.train()  # Set model to training mode
-            else:
-                model.eval()   # Set model to evaluate mode
-            running_loss = 0.0
-            running_corrects = 0
-            # Iterate over data
+# =====================================================================
+print("[INFO] Start Training...")
+# Log the time
+time_start = time.time()
+num_epochs=maxepoch
+since = time.time()
+best_model_wts = copy.deepcopy(model.state_dict())
+best_acc = 100000000.0
+train_loss = []
+for epoch in range(num_epochs+1):
+    # print('Epoch {}/{}'.format(epoch, num_epochs - 1))
+    # Each epoch has a training and validation phase
+    for phase in ['train']:#, 'val']:
+        if phase == 'train':
+            model.train()  # Set model to training mode
+        else:
+            model.eval()   # Set model to evaluate mode
+        running_loss = 0.0
+        running_corrects = 0
+        # Iterate over data
+        
+        # for batch in data_loader:
+        #     inputs = batch['image'].to(device)
+        #     labels = batch['groundtruth'].to(device)
+        for i in range(len(heathaze_dataset)):
+            sample = heathaze_dataset[i]
+            inputs = sample['image'].to(device)
+            labels = sample['groundtruth'].to(device)
+
+            # print('input ' + str(inputs.shape))
+            # print('labels ' + str(labels.shape))
+            # zero the parameter gradients
+            optimizer.zero_grad()
+            # forward
+            # track history if only in train
+            with torch.set_grad_enabled(phase == 'train'):
+            # with torch.no_grad():
+                outputs = model(inputs)
+                # if (i == 10) and ((epoch % 50) == 0):
+                if (i == 10):
+                    output = outputs.clone()
+                    output = output.squeeze(0)
+                    output = output.detach().cpu().numpy()
+                    output = output.transpose((1, 2, 0))
+                    output = (output*0.5 + 0.5)*255
+                    io.imsave(os.path.join(resultDirOut, 'training'+ str(epoch) + '.png'), output.astype(np.uint8))
+                    #output = labels.clone()
+                    #output = output.squeeze(0)
+                    #output = output.detach().cpu().numpy()
+                    #output = output.transpose((1, 2, 0))
+                    #output = (output*0.5 + 0.5)*255
+                    #io.imsave(os.path.join(resultDirOutImg, 'input.png'), output.astype(np.uint8))
+                loss = criterion(outputs, labels)
+                #loss.requires_grad_(True)
+                loss.backward()
+                optimizer.step()
+            # statistics
+            running_loss += loss.item() * inputs.size(0)
+
+        epoch_loss = running_loss / len(heathaze_dataset)
+        if lossgraph == 'true':
+            train_loss.append(epoch_loss)
             
-            # for batch in data_loader:
-            #     inputs = batch['image'].to(device)
-            #     labels = batch['groundtruth'].to(device)
-            for i in range(len(heathaze_dataset)):
-                sample = heathaze_dataset[i]
-                inputs = sample['image'].to(device)
-                labels = sample['groundtruth'].to(device)
+        # print('\n')
+        print('[Epoch] ' + str(epoch),':' + '[Loss] ' + str(epoch_loss))
+        # print('\n')
+        # if (epoch % 20) == 0:
+        torch.save(model.state_dict(), os.path.join(resultDir, savemodelname + '_ep'+str(epoch)+'.pth.tar'))
+        np.save(os.path.join(resultDir,'loss_array.npy'), np.array(train_loss))
+        # deep copy the model
+        if (epoch>=3) and (epoch_loss < best_acc):
+            best_acc = epoch_loss
+            torch.save(model.state_dict(), os.path.join(resultDir, 'best_'+savemodelname+'.pth.tar'))
+            
+# Log the time again
+time_end = time.time()
+print ("It took %d hours for training." % ((time_end-time_start)/3600))
 
-                # print('input ' + str(inputs.shape))
-                # print('labels ' + str(labels.shape))
-                # zero the parameter gradients
-                optimizer.zero_grad()
-                # forward
-                # track history if only in train
-                with torch.set_grad_enabled(phase == 'train'):
-                # with torch.no_grad():
-                    outputs = model(inputs)
-                    # if (i == 10) and ((epoch % 50) == 0):
-                    if (i == 10):
-                        output = outputs.clone()
-                        output = output.squeeze(0)
-                        output = output.detach().cpu().numpy()
-                        output = output.transpose((1, 2, 0))
-                        output = (output*0.5 + 0.5)*255
-                        io.imsave(os.path.join(resultDirOut, 'training'+ str(epoch) + '.png'), output.astype(np.uint8))
-                        #output = labels.clone()
-                        #output = output.squeeze(0)
-                        #output = output.detach().cpu().numpy()
-                        #output = output.transpose((1, 2, 0))
-                        #output = (output*0.5 + 0.5)*255
-                        #io.imsave(os.path.join(resultDirOutImg, 'input.png'), output.astype(np.uint8))
-                    loss = criterion(outputs, labels)
-                    #loss.requires_grad_(True)
-                    loss.backward()
-                    optimizer.step()
-                # statistics
-                running_loss += loss.item() * inputs.size(0)
-
-            epoch_loss = running_loss / len(heathaze_dataset)
-            if lossgraph == 'true':
-                train_loss.append(epoch_loss)
-                
-            # print('\n')
-            print('[Epoch] ' + str(epoch),':' + '[Loss] ' + str(epoch_loss))
-            # print('\n')
-            # if (epoch % 20) == 0:
-            torch.save(model.state_dict(), os.path.join(resultDir, savemodelname + '_ep'+str(epoch)+'.pth.tar'))
-            np.save(os.path.join(resultDir,'loss_array.npy'), np.array(train_loss))
-            # deep copy the model
-            if (epoch>=3) and (epoch_loss < best_acc):
-                best_acc = epoch_loss
-                torch.save(model.state_dict(), os.path.join(resultDir, 'best_'+savemodelname+'.pth.tar'))
-                
-    # Log the time again
-    time_end = time.time()
-    print ("It took %d seconds for training." % (time_end-time_start))
-
-    # if lossgraph == 'true':
-    #     # plot loss graph
-    #     plt.figure(figsize=(10,5))
-    #     plt.title('Training Loss')
-    #     plt.plot(train_loss,label="loss")
-    #     plt.xlabel("Epoch")
-    #     plt.ylabel("Loss")
-    #     plt.legend()
-    #     plt.show()
+# if lossgraph == 'true':
+#     # plot loss graph
+#     plt.figure(figsize=(10,5))
+#     plt.title('Training Loss')
+#     plt.plot(train_loss,label="loss")
+#     plt.xlabel("Epoch")
+#     plt.ylabel("Loss")
+#     plt.legend()
+#     plt.show()
 

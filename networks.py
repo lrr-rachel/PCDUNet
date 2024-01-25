@@ -1,4 +1,3 @@
-                                                                                                        
 import torch
 import torch.nn as nn
 from torch.nn import init
@@ -6,7 +5,6 @@ import functools
 from torch.optim import lr_scheduler
 from torch.nn import Parameter
 from torch.nn.utils import parameters_to_vector
-from dcn_plain import DeformableConv2d
 
 
 ###############################################################################
@@ -17,6 +15,7 @@ from dcn_plain import DeformableConv2d
 class Identity(nn.Module):
     def forward(self, x):
         return x
+
 
 def softshrink(x, lambd=0.5):
     # Return a softshrink layer
@@ -34,6 +33,7 @@ def init_weights(net, init_type='normal', init_gain=0.02):
     We use 'normal' in the original pix2pix and CycleGAN paper. But xavier and kaiming might
     work better for some applications. Feel free to try yourself.
     """
+
     def init_func(m):  # define the initialization function
         classname = m.__class__.__name__
         if hasattr(m, 'weight') and (classname.find('Conv') != -1 or classname.find('Linear') != -1):
@@ -49,7 +49,8 @@ def init_weights(net, init_type='normal', init_gain=0.02):
                 raise NotImplementedError('initialization method [%s] is not implemented' % init_type)
             if hasattr(m, 'bias') and m.bias is not None:
                 init.constant_(m.bias.data, 0.0)
-        elif classname.find('BatchNorm2d') != -1:  # BatchNorm Layer's weight is not a matrix; only normal distribution applies.
+        elif classname.find(
+                'BatchNorm2d') != -1:  # BatchNorm Layer's weight is not a matrix; only normal distribution applies.
             init.normal_(m.weight.data, 1.0, init_gain)
             init.constant_(m.bias.data, 0.0)
 
@@ -68,7 +69,7 @@ def init_net(net, init_type='normal', init_gain=0.02, gpu_ids=[]):
     Return an initialized network.
     """
     if len(gpu_ids) > 0:
-        assert(torch.cuda.is_available())
+        assert (torch.cuda.is_available())
         net.to(gpu_ids[0])
         net = torch.nn.DataParallel(net, gpu_ids)  # multi-GPUs
     init_weights(net, init_type, init_gain=init_gain)
@@ -79,7 +80,7 @@ def init_net(net, init_type='normal', init_gain=0.02, gpu_ids=[]):
 class UnetGenerator(nn.Module):
     """Create a Unet-based generator"""
 
-    def __init__(self, input_nc, output_nc, num_downs, ngf=64, norm_layer=nn.BatchNorm2d, use_dropout=False, deformable=False):
+    def __init__(self, input_nc, output_nc, num_downs, ngf=64, norm_layer=nn.BatchNorm2d, use_dropout=False):
         """Construct a Unet generator
         Parameters:
             input_nc (int)  -- the number of channels in input images
@@ -94,14 +95,20 @@ class UnetGenerator(nn.Module):
         """
         super(UnetGenerator, self).__init__()
         # construct unet structure
-        unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer, innermost=True, deformable=deformable)  # add the innermost layer
-        for i in range(num_downs - 5):          # add intermediate layers with ngf * 8 filters
-            unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, use_dropout=use_dropout, deformable=deformable)
+        unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer,
+                                             innermost=True)  # add the innermost layer
+        print()
+        for i in range(num_downs - 5):  # add intermediate layers with ngf * 8 filters
+            unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block,
+                                                 norm_layer=norm_layer, use_dropout=use_dropout)
         # gradually reduce the number of filters from ngf * 8 to ngf
-        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, deformable=deformable)
-        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block, norm_layer=norm_layer, deformable=deformable)
-        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer, deformable=deformable)
-        self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, outermost=True, norm_layer=norm_layer, deformable=deformable)  # add the outermost layer
+        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block,
+                                             norm_layer=norm_layer)
+        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block,
+                                             norm_layer=norm_layer)
+        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
+        self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, outermost=True,
+                                             norm_layer=norm_layer)  # add the outermost layer
 
     def forward(self, input):
         """Standard forward"""
@@ -115,7 +122,7 @@ class UnetSkipConnectionBlock(nn.Module):
     """
 
     def __init__(self, outer_nc, inner_nc, input_nc=None,
-                 submodule=None, outermost=False, innermost=False, norm_layer=False, use_dropout=False, deformable=False):
+                 submodule=None, outermost=False, innermost=False, norm_layer=False, use_dropout=False):
         """Construct a Unet submodule with skip connections.
 
         Parameters:
@@ -130,73 +137,48 @@ class UnetSkipConnectionBlock(nn.Module):
         """
         super(UnetSkipConnectionBlock, self).__init__()
         self.outermost = outermost
-        if type(norm_layer) == functools.partial:
-            use_bias = norm_layer.func == nn.InstanceNorm2d
-        else:
-            use_bias = norm_layer == nn.InstanceNorm2d
         if input_nc is None:
             input_nc = outer_nc
-        conv = nn.Conv2d if deformable==False else DeformableConv2d
-        downconv = conv(input_nc, inner_nc, kernel_size=4,
-                             stride=2, padding=1, bias=use_bias)
-        samesizeconv = conv(inner_nc, inner_nc, kernel_size=3,
-                            stride=1, padding=1, bias=use_bias)
-        downrelu = nn.LeakyReLU(0.2, True)
-        uprelu = nn.ReLU(True)
+
+        downconv = nn.Conv2d(input_nc, inner_nc, kernel_size=4, stride=2, padding=1)
+        downrelu = nn.LeakyReLU(0.2, False)
         downnorm = nn.BatchNorm2d(inner_nc)
+
+        up_inner_nc = inner_nc if innermost else inner_nc * 2
+        up_conv_layer = nn.Conv2d(up_inner_nc, outer_nc, kernel_size=3, padding=1)
+
+        wide_layer = nn.Conv2d(up_inner_nc, up_inner_nc * 4,
+                               kernel_size=1, stride=1,
+                               padding=0)
+        upconv = [wide_layer, nn.LeakyReLU(0.2, False), nn.PixelShuffle(2), up_conv_layer]
+        uprelu = nn.ReLU(False)
         upnorm = nn.BatchNorm2d(outer_nc)
 
         if outermost:
-            upconv = nn.ConvTranspose2d(inner_nc * 2, inner_nc,
-                                        kernel_size=4, stride=2,
-                                        padding=1)
-            lastconv = nn.Conv2d(inner_nc, outer_nc, kernel_size=1,
-                                        stride=1, bias=use_bias)
-            firstconv = conv(input_nc, inner_nc, kernel_size=3,
-                                        stride=1, padding=1, bias=use_bias)
-            down = conv(inner_nc, inner_nc, kernel_size=4,
-                             stride=2, padding=1, bias=use_bias)
-            up = [uprelu, upconv, uprelu, nn.Conv2d(inner_nc, inner_nc, kernel_size=3,
-                            stride=1, padding=1, bias=use_bias), uprelu, lastconv, nn.Tanh()]
-            model = [firstconv, uprelu, down] + [submodule] + up
+            down = [downconv]
+            up = [uprelu] + upconv + [nn.Tanh()]
+            model = down + [submodule] + up
         elif innermost:
-            upconv = nn.ConvTranspose2d(inner_nc, outer_nc,
-                                        kernel_size=4, stride=2,
-                                        padding=1, bias=use_bias)
             down = [downrelu, downconv]
-            same = [uprelu, samesizeconv, uprelu, samesizeconv]
             if norm_layer:
-                up = [uprelu, upconv, upnorm]
-            else:
-                up = [uprelu, upconv]
-            model = down + same + up
+                up = [uprelu] + upconv + [upnorm]
+            else: 
+                up = [uprelu] + upconv
+            model = down + up
         else:
-            upconv = nn.ConvTranspose2d(inner_nc , outer_nc,
-                                        kernel_size=4, stride=2,
-                                        padding=1, bias=use_bias)
-            beforeupconv = nn.Conv2d(inner_nc * 2, inner_nc , kernel_size=3,
-                                        stride=1, padding=1, bias=use_bias)
-            beforedownconv = conv(input_nc, input_nc , kernel_size=3,
-                                        stride=1, padding=1, bias=use_bias)
-
+            down = [downrelu, downconv, downnorm]
             if norm_layer:
-                down = [downrelu, beforedownconv, uprelu, downconv, downnorm]
-                up = [uprelu,beforeupconv,uprelu, samesizeconv, uprelu, upconv, upnorm]
+                up = [uprelu] + upconv + [upnorm]
             else:
-                down = [downrelu, beforedownconv, uprelu, downconv]
-                up = [uprelu,beforeupconv,uprelu, samesizeconv, uprelu, upconv]
-
-            if use_dropout:
-                model = down + [submodule] + up + [nn.Dropout(0.5)]
-            else:
-                model = down + [submodule] + up
+                up = [uprelu] + upconv
+            model = down + [submodule] + up
 
         self.model = nn.Sequential(*model)
 
     def forward(self, x):
         if self.outermost:
             return self.model(x)
-        else:   # add skip connections
+        else:  # add skip connections
             return torch.cat([x, self.model(x)], 1)
 
 

@@ -135,7 +135,6 @@ class PCDUNet(nn.Module):
         hr_in (bool): Whether the input has high resolution. Default: False.
         num_downs (int): the number of downsamplings in UNet. For example, # if |num_downs| == 7,
                                 image of size 128x128 will become of size 1x1 # at the bottleneck
-        deform (bool): deformable convolution
         norm_layer (bool): normalization layer
     """
 
@@ -150,7 +149,6 @@ class PCDUNet(nn.Module):
                  center_frame_idx=None,
                  hr_in=False,
                  num_downs = 5,
-                 deformable = False,
                  norm_layer = True):
         super(PCDUNet, self).__init__()
         if center_frame_idx is None:
@@ -158,8 +156,6 @@ class PCDUNet(nn.Module):
         else:
             self.center_frame_idx = center_frame_idx
         self.hr_in = hr_in
-        self.with_predeblur = with_predeblur
-        self.with_tsa = with_tsa
 
       
         self.conv_first = nn.Conv2d(num_in_ch, num_feat, 3, 1, 1)
@@ -190,14 +186,14 @@ class PCDUNet(nn.Module):
 
         # unet
         ngf = 64 # the number of filters in the last conv layer
-        unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer, innermost=True, deformable=deformable)  # add the innermost layer
+        unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer, innermost=True)  # add the innermost layer
         for i in range(num_downs - 5):          # add intermediate layers with ngf * 8 filters
-            unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, use_dropout=False, deformable=deformable)
+            unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, use_dropout=False)
         # gradually reduce the number of filters from ngf * 8 to ngf
-        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, deformable=deformable)
-        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block, norm_layer=norm_layer, deformable=deformable)
-        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer, deformable=deformable)
-        self.unet_model = UnetSkipConnectionBlock(3, ngf, input_nc=3, submodule=unet_block, outermost=True, norm_layer=norm_layer, deformable=deformable)  # add the outermost layer
+        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
+        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
+        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
+        self.unet_model = UnetSkipConnectionBlock(3, ngf, input_nc=3, submodule=unet_block, outermost=True, norm_layer=norm_layer)  # add the outermost layer
 
 
 
@@ -212,12 +208,8 @@ class PCDUNet(nn.Module):
 
         # extract features for each frame
         # L1
-        if self.with_predeblur:
-            feat_l1 = self.conv_1x1(self.predeblur(x.view(-1, c, h, w)))
-            if self.hr_in:
-                h, w = h // 4, w // 4
-        else:
-            feat_l1 = self.lrelu(self.conv_first(x.view(-1, c, h, w)))
+        
+        feat_l1 = self.lrelu(self.conv_first(x.view(-1, c, h, w)))
 
         feat_l1 = self.feature_extraction(feat_l1)
         # L2
@@ -244,8 +236,8 @@ class PCDUNet(nn.Module):
             aligned_feat.append(self.pcd_align(nbr_feat_l, ref_feat_l))
         aligned_feat = torch.stack(aligned_feat, dim=1)  # (b, t, c, h, w)
 
-        if not self.with_tsa:
-            aligned_feat = aligned_feat.view(b, -1, h, w)
+
+        aligned_feat = aligned_feat.view(b, -1, h, w)
         feat = self.fusion(aligned_feat)
 
         out = self.reconstruction(feat)
